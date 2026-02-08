@@ -57,7 +57,7 @@
 1.  Клонируйте репозиторий (или просто скачайте файл `dynamic_html_downloader.py`):
 
     ```bash
-    git clone https://github.com/аааа/crazyflix-downloader.git
+    git clone https://github.com/Oleg19023/Crazyflix-dynamic-downloader.git
     cd crazyflix-downloader
     ```
 
