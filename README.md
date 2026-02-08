@@ -1,4 +1,4 @@
-# 🤖 CrazyFlix Dynamic Downloader & Parser
+# 🤖 CrazyFlix Dynamic Downloader HDrezka & Parser
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python Version">
