@@ -116,7 +116,6 @@ def print_header():
     print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v4.5 ---{Style.RESET_ALL}")
     print(f"{Fore.CYAN}--- Powered by CrazyFire ---{Style.RESET_ALL}")
     
-    # Цвета статусов по запросу
     st_val = f"{Fore.GREEN}ON" if CONFIG['stealth'] else f"{Fore.RED}OFF"
     ad_val = f"{Fore.GREEN}ON" if CONFIG['adblock'] else f"{Fore.RED}OFF"
     fs_val = f"{Fore.GREEN}ON" if CONFIG['fast_load'] else f"{Fore.RED}OFF"
@@ -170,6 +169,14 @@ def check_interrupt():
 # ==========================================
 #       РЕЖИМ 3: ПРОКСИ
 # ==========================================
+
+async def check_single_proxy(session, p_addr, semaphore):
+    async with semaphore:
+        try:
+            async with session.get("http://www.google.com", proxy=f"http://{p_addr}", timeout=10) as r:
+                if r.status == 200: return p_addr, True
+        except: pass
+        return p_addr, False
 
 async def run_proxy_manager():
     while True:
@@ -255,14 +262,6 @@ async def run_proxy_manager():
 
         elif idx == 4: break
 
-async def check_single_proxy(session, p_addr, semaphore):
-    async with semaphore:
-        try:
-            async with session.get("http://www.google.com", proxy=f"http://{p_addr}", timeout=10) as r:
-                if r.status == 200: return p_addr, True
-        except: pass
-        return p_addr, False
-
 # ==========================================
 #       РЕЖИМ 2: СКАЧИВАНИЕ
 # ==========================================
@@ -333,7 +332,7 @@ async def run_html_downloader():
         to_do, loop_cnt = urls, 1
         while to_do and not STOP_PROCESS:
             tasks = [download_html_task(browser, u, sem, proxies) for u in to_do]
-            res = await tqdm.gather(*tasks, desc=f"Круг {loop_cnt}")
+            res = await tqdm.gather(*tasks, desc=f"Загрузка (Круг {loop_cnt})")
             if STOP_PROCESS: break
             failed = [u for u, s in res if not s]
             if not failed: break
@@ -342,6 +341,12 @@ async def run_html_downloader():
                 if idx == 1: break
             to_do, loop_cnt = failed, loop_cnt + 1
         await browser.close()
+    
+    # ФИКС: Пауза после завершения
+    if not STOP_PROCESS:
+        print(f"\n{Fore.GREEN}[COMPLETE] Процесс скачивания завершен успешно!{Style.RESET_ALL}")
+        print(f"Нажмите любую клавишу для возврата в меню...")
+        msvcrt.getch()
 
 # ==========================================
 #       РЕЖИМ 1: ПАРСЕР
@@ -391,10 +396,18 @@ async def run_category_parser():
                 CURRENT_ACTIVE_PROXY = None
             finally: await context.close()
         await browser.close()
-    if all_l and not STOP_PROCESS: save_urls_to_file(all_l)
-    if not STOP_PROCESS: input("\nНажмите Enter...")
+    
+    if all_l and not STOP_PROCESS: 
+        save_urls_to_file(all_l)
+        print(f"\n{Fore.GREEN}[COMPLETE] Парсинг завершен!{Style.RESET_ALL}")
+        print("Нажмите любую клавишу для возврата...")
+        msvcrt.getch()
+    elif not STOP_PROCESS:
+        print(f"\n{Fore.YELLOW}[INFO] Ссылки не найдены.{Style.RESET_ALL}")
+        msvcrt.getch()
 
 async def run_franchise_parser():
+    global STOP_PROCESS
     print(f"\n{Fore.GREEN}Вставьте ссылку на франшизу: {Style.RESET_ALL}", end="", flush=True)
     url = input().strip()
     if not url: return
@@ -413,7 +426,9 @@ async def run_franchise_parser():
             if links: save_urls_to_file(links)
         except: pass
         await browser.close()
-    input("\nНажмите Enter...")
+    
+    print(f"\n{Fore.GREEN}[COMPLETE] Готово! Нажмите любую клавишу...{Style.RESET_ALL}")
+    msvcrt.getch()
 
 # ==========================================
 #       МЕНЮ НАСТРОЕК
