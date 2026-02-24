@@ -116,6 +116,7 @@ def print_header():
     print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v4.5 ---{Style.RESET_ALL}")
     print(f"{Fore.CYAN}--- Powered by CrazyFire ---{Style.RESET_ALL}")
     
+    # Цвета статусов по запросу
     st_val = f"{Fore.GREEN}ON" if CONFIG['stealth'] else f"{Fore.RED}OFF"
     ad_val = f"{Fore.GREEN}ON" if CONFIG['adblock'] else f"{Fore.RED}OFF"
     fs_val = f"{Fore.GREEN}ON" if CONFIG['fast_load'] else f"{Fore.RED}OFF"
@@ -407,7 +408,9 @@ async def run_category_parser():
         msvcrt.getch()
 
 async def run_franchise_parser():
-    global STOP_PROCESS
+    # ФИКС: добавлено global CURRENT_ACTIVE_PROXY
+    global STOP_PROCESS, CURRENT_ACTIVE_PROXY
+    STOP_PROCESS = False
     print(f"\n{Fore.GREEN}Вставьте ссылку на франшизу: {Style.RESET_ALL}", end="", flush=True)
     url = input().strip()
     if not url: return
