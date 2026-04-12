@@ -1,7 +1,7 @@
 """
 ------------------------------------------------------------------------------
 SOFTWARE: CrazyFlix Downloader HTML
-VERSION: 4.5
+VERSION: 5.3.1
 
 АВТОРСКИЕ ПРАВА (C) 2026 CrazyFire. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
 
@@ -47,13 +47,15 @@ AD_BLOCK_LIST = [
 CONFIG = {
     "stealth": True,
     "adblock": True,
-    "fast_load": True
+    "fast_load": True,
+    "use_proxy": True,
+    "infinite_retry": False
 }
 
 BROWSER_ARGS = [
     '--disable-blink-features=AutomationControlled',
     '--window-position=10000,10000',
-    '--window-size=1,1',
+    '--window-size=1920,1080',
     '--no-first-run',
     '--no-default-browser-check',
     '--hide-scrollbars'
@@ -63,7 +65,7 @@ CURRENT_ACTIVE_PROXY = None
 STOP_PROCESS = False
 
 # ==========================================
-#       СИСТЕМНЫЕ ФУНКЦИИ (ФАЙЛЫ) - В НАЧАЛЕ
+#       СИСТЕМНЫЕ ФУНКЦИИ
 # ==========================================
 
 def load_urls_from_file() -> list:
@@ -84,6 +86,27 @@ def save_urls_to_file(new_urls: list):
             if u and u not in existing:
                 f.write(u + "\n"); existing.add(u); added += 1
     print(f"\n{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} Добавлено уникальных ссылок: {added}")
+
+def clear_url_file():
+    if not os.path.exists(URL_FILE):
+        print(f"\n{Fore.RED}[ERROR]{Style.RESET_ALL} Файл со ссылками не найден.")
+        time.sleep(1); return
+    
+    print(f"\n{Fore.YELLOW}Вы уверены, что хотите очистить список ссылок? (y/n): {Style.RESET_ALL}", end="", flush=True)
+    
+    # ФИКС: Безопасное чтение клавиши (поддержка кириллицы без байтового литерала)
+    raw_char = msvcrt.getch()
+    try:
+        confirm = raw_char.decode('cp866').lower() # Для русской Windows
+    except:
+        confirm = raw_char.decode('utf-8', errors='ignore').lower()
+
+    if confirm == 'y' or confirm == 'г':
+        with open(URL_FILE, 'w', encoding='utf-8') as f: f.write("")
+        print(f"\n{Fore.GREEN}[DONE]{Style.RESET_ALL} Список очищен.")
+    else:
+        print(f"\n{Fore.CYAN}[SKIP]{Style.RESET_ALL} Отмена операции.")
+    time.sleep(1)
 
 def load_proxies() -> list:
     if not os.path.exists(PROXY_FILE): return []
@@ -113,15 +136,17 @@ def clean_filename(url: str) -> str:
 
 def print_header():
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v4.5 ---{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v5.3.1 ---{Style.RESET_ALL}")
     print(f"{Fore.CYAN}--- Powered by CrazyFire ---{Style.RESET_ALL}")
     
-    # Цвета статусов по запросу
     st_val = f"{Fore.GREEN}ON" if CONFIG['stealth'] else f"{Fore.RED}OFF"
     ad_val = f"{Fore.GREEN}ON" if CONFIG['adblock'] else f"{Fore.RED}OFF"
     fs_val = f"{Fore.GREEN}ON" if CONFIG['fast_load'] else f"{Fore.RED}OFF"
+    pr_val = f"{Fore.GREEN}ON" if CONFIG['use_proxy'] else f"{Fore.RED}OFF"
+    ir_val = f"{Fore.GREEN}ON" if CONFIG['infinite_retry'] else f"{Fore.RED}OFF"
     
-    print(f"{Fore.YELLOW}Stealth: {st_val} {Fore.WHITE}| {Fore.YELLOW}AdBlock: {ad_val} {Fore.WHITE}| {Fore.YELLOW}FastLoad: {fs_val}{Style.RESET_ALL}\n")
+    print(f"{Fore.YELLOW}Stealth: {st_val} | {Fore.YELLOW}AdBlock: {ad_val} | {Fore.YELLOW}FastLoad: {fs_val}")
+    print(f"{Fore.YELLOW}Use Proxy: {pr_val} | {Fore.YELLOW}Infinite Retry: {ir_val}{Style.RESET_ALL}\n")
 
 def interactive_menu(options, title="Выберите пункт:", show_nav=True, start_pos=0):
     current_idx = start_pos
@@ -158,7 +183,7 @@ def check_interrupt():
     if msvcrt.kbhit():
         if msvcrt.getch() == b' ':
             os.system('cls' if os.name == 'nt' else 'clear')
-            idx = interactive_menu(["Продолжить работу", "Завершить и выйти в главное меню"], "[ПАУЗА]:", False)
+            idx = interactive_menu(["Продолжить работу", "Завершить и выйти в меню"], "[ПАУЗА]:", False)
             if idx == 1:
                 STOP_PROCESS = True
                 return True
@@ -238,7 +263,7 @@ async def run_proxy_manager():
             if dead_cleaned > 0 and input(f"Удалить {dead_cleaned} нерабочих? (y/n): ").lower() == 'y':
                 with open(PROXY_FILE, 'w') as f:
                     for p in to_keep: f.write(p + "\n")
-                print(f"{Fore.GREEN}[Done] Список очищен.")
+                print(f"{Fore.GREEN}[DONE] Список очищен.")
             input("\nEnter...")
 
         elif idx == 2:
@@ -270,18 +295,33 @@ async def run_proxy_manager():
 async def download_html_task(browser, url, semaphore, proxy_list):
     global CURRENT_ACTIVE_PROXY, STOP_PROCESS
     if STOP_PROCESS: return (url, False)
+    
     async with semaphore:
         if check_interrupt() or STOP_PROCESS: return (url, False)
+        
         file_name = os.path.join(DOWNLOAD_DIR, clean_filename(url))
+        
+        tqdm.write(f"\n{Fore.BLUE}{Style.BRIGHT}=== [ TASK START ] ==={Style.RESET_ALL}")
+        tqdm.write(f"{Fore.WHITE}URL: {url}{Style.RESET_ALL}")
+        
         if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
-            tqdm.write(f"{Fore.MAGENTA}[Skip]{Style.RESET_ALL} [{url}]")
+            tqdm.write(f"{Fore.MAGENTA}[SKIP]{Style.RESET_ALL} Файл уже скачан.")
             return (url, True)
 
-        if not CURRENT_ACTIVE_PROXY and proxy_list: CURRENT_ACTIVE_PROXY = random.choice(proxy_list)
-        p_display = f"(Proxy: {CURRENT_ACTIVE_PROXY})" if CURRENT_ACTIVE_PROXY else "(Local IP)"
+        proxy_config = None
+        if CONFIG["use_proxy"] and proxy_list:
+            if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxy_list)
+            proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+            p_display = f"{CURRENT_ACTIVE_PROXY}"
+        else:
+            CURRENT_ACTIVE_PROXY = None
+            p_display = "Local IP"
+        
+        tqdm.write(f"{Fore.CYAN}[INIT]{Style.RESET_ALL} Настройка сессии... Proxy: {p_display}")
+        
         context = await browser.new_context(
             user_agent=UserAgent().random if CONFIG['stealth'] else None,
-            proxy={"server": f"http://{CURRENT_ACTIVE_PROXY}"} if CURRENT_ACTIVE_PROXY else None,
+            proxy=proxy_config,
             locale='ru-RU', timezone_id='Europe/Moscow'
         )
 
@@ -293,23 +333,59 @@ async def download_html_task(browser, url, semaphore, proxy_list):
             page = await context.new_page()
             if CONFIG['adblock']: await page.route("**/*", block_ads)
             await page.add_init_script("window.open = () => { return null; }; Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-            if STOP_PROCESS: return (url, False)
+            
             w_state = 'domcontentloaded' if CONFIG['fast_load'] else 'networkidle'
+            tqdm.write(f"{Fore.CYAN}[NETWORK]{Style.RESET_ALL} Загрузка контента...")
             await page.goto(url, wait_until=w_state, timeout=45000)
+            
+            # --- ТРЕЙЛЕР ---
             try:
-                btn = 'a.b-sidelinks__link.show-trailer'
-                await page.wait_for_selector(btn, state='visible', timeout=8000)
-                if not STOP_PROCESS: await page.click(btn); await asyncio.sleep(1.5)
-            except: pass
+                tqdm.write(f"{Fore.CYAN}[SEARCH]{Style.RESET_ALL} Поиск кнопки трейлера...")
+                try: await page.wait_for_load_state('networkidle', timeout=5000); await asyncio.sleep(1)
+                except: pass
+
+                btn = page.locator('a.b-sidelinks__link.show-trailer').first
+                
+                if await btn.count() > 0 and await btn.is_visible():
+                    trailer_opened = False
+                    for attempt in range(1, 4):
+                        if STOP_PROCESS: break
+                        tqdm.write(f"  {Fore.YELLOW}[TRAILER]{Style.RESET_ALL} Попытка {attempt}/3...")
+                        try:
+                            await btn.hover(timeout=3000)
+                            await btn.click(force=True, timeout=3000)
+                            await btn.evaluate("""node => {
+                                const e = new MouseEvent('click', {view:window, bubbles:true, cancelable:true});
+                                node.dispatchEvent(e);
+                            }""")
+                            await page.wait_for_selector('iframe[src*="youtube"], iframe[src*="google"], .mfp-wrap', state='attached', timeout=4000)
+                            tqdm.write(f"  {Fore.GREEN}[TRAILER]{Style.RESET_ALL} Плеер обнаружен в коде.")
+                            await asyncio.sleep(1.5)
+                            trailer_opened = True
+                            break 
+                        except:
+                            tqdm.write(f"  {Fore.RED}[TRAILER]{Style.RESET_ALL} Ссылка не найдена.")
+                    
+                    if not trailer_opened and not STOP_PROCESS:
+                        tqdm.write(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Не удалось найти плеер. Отмена.")
+                        return (url, False) 
+                else:
+                    tqdm.write(f"  {Fore.MAGENTA}[TRAILER]{Style.RESET_ALL} Трейлер отсутствует.")
+            except Exception as e: 
+                tqdm.write(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Ошибка: {str(e).splitlines()[0][:40]}")
+                return (url, False)
+            # ---------------
+
             if not STOP_PROCESS:
+                tqdm.write(f"{Fore.CYAN}[SAVE]{Style.RESET_ALL} Сохранение HTML...")
                 content = await page.content()
                 with open(file_name, 'w', encoding='utf-8') as f: f.write(content)
-                tqdm.write(f"{Fore.GREEN}[Done]{Style.RESET_ALL} {p_display} [{url}]")
+                tqdm.write(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} Завершено: {clean_filename(url)}")
                 return (url, True)
             return (url, False)
+            
         except Exception as e:
-            err = str(e).split('\n')[0][:50]
-            tqdm.write(f"{Fore.RED}[Failed]{Style.RESET_ALL} {p_display} [{url}] Error: {err}")
+            tqdm.write(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Ошибка: {str(e).splitlines()[0][:50]}")
             CURRENT_ACTIVE_PROXY = None 
             return (url, False)
         finally: await context.close()
@@ -325,7 +401,7 @@ async def run_html_downloader():
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     os.system('cls' if os.name == 'nt' else 'clear')
     print(f"{Fore.CYAN}--- ЗАПУСК СКАЧИВАНИЯ ---{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[Нажмите ПРОБЕЛ для паузы или отмены]{Style.RESET_ALL}\n")
+    print(f"{Fore.YELLOW}[ПРОБЕЛ - Пауза/Отмена]{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
@@ -333,20 +409,26 @@ async def run_html_downloader():
         to_do, loop_cnt = urls, 1
         while to_do and not STOP_PROCESS:
             tasks = [download_html_task(browser, u, sem, proxies) for u in to_do]
-            res = await tqdm.gather(*tasks, desc=f"Загрузка (Круг {loop_cnt})")
+            res = await tqdm.gather(*tasks, desc=f"Круг {loop_cnt}")
             if STOP_PROCESS: break
             failed = [u for u, s in res if not s]
+            
             if not failed: break
+            
+            if CONFIG["infinite_retry"]:
+                tqdm.write(f"\n{Fore.YELLOW}[RETRY]{Style.RESET_ALL} Режим 'До победного' активен. Начинаем круг {loop_cnt+1}...")
+                to_do, loop_cnt = failed, loop_cnt + 1
+                continue
+
             if loop_cnt >= 2:
-                idx = interactive_menu(["Повторить попытку", "Выход"], f"Завершено. Ошибок: {len(failed)}", False)
+                idx = interactive_menu(["Повторить еще раз", "Выход"], f"Завершено. Ошибок: {len(failed)}", False)
                 if idx == 1: break
+            
             to_do, loop_cnt = failed, loop_cnt + 1
         await browser.close()
     
-    # ФИКС: Пауза после завершения
     if not STOP_PROCESS:
-        print(f"\n{Fore.GREEN}[COMPLETE] Процесс скачивания завершен успешно!{Style.RESET_ALL}")
-        print(f"Нажмите любую клавишу для возврата в меню...")
+        print(f"\n{Fore.GREEN}[SUCCESS] Работа завершена!{Style.RESET_ALL}")
         msvcrt.getch()
 
 # ==========================================
@@ -361,7 +443,7 @@ async def run_category_parser():
     c_idx = interactive_menu([c[0] for c in cats] + ["Назад"], "КАТЕГОРИЯ:", True)
     if c_idx == 6: return
     
-    print(f"\n{Fore.GREEN}Введите количество страниц: {Style.RESET_ALL}", end="", flush=True)
+    print(f"\n{Fore.GREEN}Количество страниц: {Style.RESET_ALL}", end="", flush=True)
     p_input = ""
     while True:
         char = msvcrt.getch()
@@ -374,54 +456,59 @@ async def run_category_parser():
     proxies = favs if favs else load_proxies()
     
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"{Fore.CYAN}--- ЗАПУСК ПАРСИНГА ССЫЛОК ---{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[Нажмите ПРОБЕЛ для паузы или отмены]{Style.RESET_ALL}\n")
+    print(f"{Fore.CYAN}--- ПАРСИНГ ---{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
         all_l = []
         for i in range(1, p_num + 1):
             if STOP_PROCESS or check_interrupt(): break
-            if not CURRENT_ACTIVE_PROXY and proxies: CURRENT_ACTIVE_PROXY = random.choice(proxies)
-            p_display = f"(Proxy: {CURRENT_ACTIVE_PROXY})" if CURRENT_ACTIVE_PROXY else "(Local IP)"
-            context = await browser.new_context(proxy={"server": f"http://{CURRENT_ACTIVE_PROXY}"} if CURRENT_ACTIVE_PROXY else None)
+            
+            proxy_config = None
+            if CONFIG["use_proxy"] and proxies:
+                if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
+                proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+                p_display = f"{CURRENT_ACTIVE_PROXY}"
+            else:
+                p_display = "Local IP"
+
+            context = await browser.new_context(proxy=proxy_config)
             try:
                 page = await context.new_page()
                 await page.goto(f"{BASE_URL}{cats[c_idx][1]}" + (f"page/{i}/" if i > 1 else ""), wait_until='domcontentloaded', timeout=25000)
                 links = await page.locator('.b-content__inline_item-link a').evaluate_all("els => els.map(e => e.href)")
                 all_l.extend(links)
-                print(f"{Fore.GREEN}[Done]{Style.RESET_ALL} {p_display} Стр {i}/{p_num}")
+                print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} {p_display} Стр {i}/{p_num}")
             except Exception as e:
-                err = str(e).split('\n')[0][:30]
-                print(f"{Fore.RED}[Failed]{Style.RESET_ALL} {p_display} Стр {i} Error: {err}")
+                print(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Стр {i} Error: {str(e)[:30]}")
                 CURRENT_ACTIVE_PROXY = None
             finally: await context.close()
         await browser.close()
     
     if all_l and not STOP_PROCESS: 
         save_urls_to_file(all_l)
-        print(f"\n{Fore.GREEN}[COMPLETE] Парсинг завершен!{Style.RESET_ALL}")
-        print("Нажмите любую клавишу для возврата...")
-        msvcrt.getch()
-    elif not STOP_PROCESS:
-        print(f"\n{Fore.YELLOW}[INFO] Ссылки не найдены.{Style.RESET_ALL}")
+        print(f"\n{Fore.GREEN}[SUCCESS] Готово! Нажмите клавишу...{Style.RESET_ALL}")
         msvcrt.getch()
 
 async def run_franchise_parser():
-    # ФИКС: добавлено global CURRENT_ACTIVE_PROXY
     global STOP_PROCESS, CURRENT_ACTIVE_PROXY
     STOP_PROCESS = False
-    print(f"\n{Fore.GREEN}Вставьте ссылку на франшизу: {Style.RESET_ALL}", end="", flush=True)
+    print(f"\n{Fore.GREEN}Ссылка на франшизу: {Style.RESET_ALL}", end="", flush=True)
     url = input().strip()
     if not url: return
     favs = load_favorites()
     proxies = favs if favs else load_proxies()
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"{Fore.CYAN}--- ЗАПУСК ПАРСИНГА ФРАНШИЗЫ ---{Style.RESET_ALL}\n")
+    print(f"{Fore.CYAN}--- ПАРСИНГ ---{Style.RESET_ALL}\n")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
-        if not CURRENT_ACTIVE_PROXY and proxies: CURRENT_ACTIVE_PROXY = random.choice(proxies)
-        ctx = await browser.new_context(proxy={"server": f"http://{CURRENT_ACTIVE_PROXY}"} if CURRENT_ACTIVE_PROXY else None)
+        
+        proxy_config = None
+        if CONFIG["use_proxy"] and proxies:
+            if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
+            proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+
+        ctx = await browser.new_context(proxy=proxy_config)
         try:
             page = await ctx.new_page()
             await page.goto(url, wait_until='domcontentloaded')
@@ -429,8 +516,7 @@ async def run_franchise_parser():
             if links: save_urls_to_file(links)
         except: pass
         await browser.close()
-    
-    print(f"\n{Fore.GREEN}[COMPLETE] Готово! Нажмите любую клавишу...{Style.RESET_ALL}")
+    print(f"\n{Fore.GREEN}[SUCCESS] Готово!{Style.RESET_ALL}")
     msvcrt.getch()
 
 # ==========================================
@@ -442,19 +528,38 @@ async def settings_menu():
         s_mode = f"{Fore.GREEN}[ВКЛ]" if CONFIG['stealth'] else f"{Fore.RED}[ОТКЛ]"
         a_mode = f"{Fore.GREEN}[ВКЛ]" if CONFIG['adblock'] else f"{Fore.RED}[ОТКЛ]"
         f_mode = f"{Fore.GREEN}[ВКЛ]" if CONFIG['fast_load'] else f"{Fore.RED}[ОТКЛ]"
-        idx = interactive_menu([f"Stealth Mode  {s_mode}", f"AdBlock       {a_mode}", f"Fast Load     {f_mode}", "Справка", "Назад"], "НАСТРОЙКИ:", True)
+        p_mode = f"{Fore.GREEN}[ВКЛ]" if CONFIG['use_proxy'] else f"{Fore.RED}[ОТКЛ]"
+        i_mode = f"{Fore.GREEN}[ВКЛ]" if CONFIG['infinite_retry'] else f"{Fore.RED}[ОТКЛ]"
+        
+        idx = interactive_menu([
+            f"Stealth Mode      {s_mode}", 
+            f"AdBlock           {a_mode}", 
+            f"Fast Load         {f_mode}", 
+            f"Use Proxy         {p_mode}", 
+            f"Infinite Retry    {i_mode}",
+            "Назад"
+        ], "НАСТРОЙКИ:", True)
+        
         if idx == 0: CONFIG['stealth'] = not CONFIG['stealth']
         elif idx == 1: CONFIG['adblock'] = not CONFIG['adblock']
         elif idx == 2: CONFIG['fast_load'] = not CONFIG['fast_load']
-        elif idx == 3:
-            os.system('cls'); print(f"{Fore.CYAN}--- СПРАВКА ---\n\nСтрелки - Навигация\nEnter - Выбор (Toggle для Избранного)\nПробел - Пауза/Отмена во время работы\n\nИзбранные имеют приоритет и защищены от удаления."); msvcrt.getch()
-        elif idx == 4: break
+        elif idx == 3: CONFIG['use_proxy'] = not CONFIG['use_proxy']
+        elif idx == 4: CONFIG['infinite_retry'] = not CONFIG['infinite_retry']
+        elif idx == 5: break
 
 async def main_menu():
     global STOP_PROCESS
     while True:
         STOP_PROCESS = False
-        idx = interactive_menu(["Парсинг ссылок для списка", "Скачивание HTML из списка", "Менеджер Прокси", "Настройки", "Выход"], "ГЛАВНОЕ МЕНЮ:", show_nav=False)
+        idx = interactive_menu([
+            "Парсинг ссылок (Сбор)", 
+            "Скачивание HTML (Загрузка)", 
+            "Менеджер Прокси", 
+            "Настройки программы", 
+            "Очистить список ссылок",
+            "Выход"
+        ], "ГЛАВНОЕ МЕНЮ:", show_nav=False)
+        
         if idx == 0:
             sub = interactive_menu(["Категории", "Франшизы", "Назад"], "ТИП ПАРСИНГА:", True)
             if sub == 0: await run_category_parser()
@@ -462,7 +567,8 @@ async def main_menu():
         elif idx == 1: await run_html_downloader()
         elif idx == 2: await run_proxy_manager()
         elif idx == 3: await settings_menu()
-        elif idx == 4: sys.exit()
+        elif idx == 4: clear_url_file()
+        elif idx == 5: sys.exit()
 
 if __name__ == "__main__":
     try: asyncio.run(main_menu())
