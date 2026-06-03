@@ -1,7 +1,7 @@
 """
 ------------------------------------------------------------------------------
 SOFTWARE: CrazyFlix Downloader HTML
-VERSION: 5.3.1
+VERSION: 5.6
 
 АВТОРСКИЕ ПРАВА (C) 2026 CrazyFire. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
 
@@ -32,6 +32,7 @@ init(autoreset=True)
 # --- КОНФИГУРАЦИЯ ---
 DOWNLOAD_DIR = "downloaded_html"
 URL_FILE = "urls_to_download.txt"
+PARSER_FILE = "parser_urls.txt"   
 PROXY_FILE = "proxies.txt"
 FAVORITES_FILE = "favorites_proxies.txt"
 MAX_CONCURRENT_TASKS = 1 
@@ -69,41 +70,46 @@ STOP_PROCESS = False
 # ==========================================
 
 def load_urls_from_file() -> list:
-    if not os.path.exists(URL_FILE): return []
-    with open(URL_FILE, 'r', encoding='utf-8') as f:
-        return [l.strip() for l in f if l.strip() and not l.startswith('#')]
+    urls = []
+    for file in [URL_FILE, PARSER_FILE]:
+        if os.path.exists(file):
+            with open(file, 'r', encoding='utf-8') as f:
+                urls.extend([l.strip() for l in f if l.strip() and not l.startswith('#')])
+    
+    seen = set()
+    return [x for x in urls if not (x in seen or seen.add(x))]
 
-def save_urls_to_file(new_urls: list):
-    if not new_urls: return
+def append_to_parser_file(new_urls: list):
+    if not new_urls: return 0
     existing = set()
-    if os.path.exists(URL_FILE):
-        with open(URL_FILE, 'r', encoding='utf-8') as f:
+    if os.path.exists(PARSER_FILE):
+        with open(PARSER_FILE, 'r', encoding='utf-8') as f:
             for line in f: existing.add(line.strip())
     added = 0
-    with open(URL_FILE, 'a', encoding='utf-8') as f:
+    with open(PARSER_FILE, 'a', encoding='utf-8') as f:
         for url in new_urls:
             u = url.strip()
             if u and u not in existing:
-                f.write(u + "\n"); existing.add(u); added += 1
-    print(f"\n{Fore.GREEN}[SUCCESS]{Style.RESET_ALL} Добавлено уникальных ссылок: {added}")
+                f.write(u + "\n")
+                existing.add(u)
+                added += 1
+    return added
 
 def clear_url_file():
-    if not os.path.exists(URL_FILE):
-        print(f"\n{Fore.RED}[ERROR]{Style.RESET_ALL} Файл со ссылками не найден.")
-        time.sleep(1); return
+    print(f"\n{Fore.YELLOW}Вы уверены, что хотите очистить все списки ссылок (Y/N)?: {Style.RESET_ALL}", end="", flush=True)
     
-    print(f"\n{Fore.YELLOW}Вы уверены, что хотите очистить список ссылок? (y/n): {Style.RESET_ALL}", end="", flush=True)
-    
-    # ФИКС: Безопасное чтение клавиши (поддержка кириллицы без байтового литерала)
     raw_char = msvcrt.getch()
     try:
-        confirm = raw_char.decode('cp866').lower() # Для русской Windows
+        confirm = raw_char.decode('cp866').lower() 
     except:
         confirm = raw_char.decode('utf-8', errors='ignore').lower()
 
     if confirm == 'y' or confirm == 'г':
-        with open(URL_FILE, 'w', encoding='utf-8') as f: f.write("")
-        print(f"\n{Fore.GREEN}[DONE]{Style.RESET_ALL} Список очищен.")
+        if os.path.exists(URL_FILE):
+            with open(URL_FILE, 'w', encoding='utf-8') as f: f.write("")
+        if os.path.exists(PARSER_FILE):
+            with open(PARSER_FILE, 'w', encoding='utf-8') as f: f.write("")
+        print(f"\n{Fore.GREEN}[DONE]{Style.RESET_ALL} Списки ссылок очищены.")
     else:
         print(f"\n{Fore.CYAN}[SKIP]{Style.RESET_ALL} Отмена операции.")
     time.sleep(1)
@@ -136,7 +142,7 @@ def clean_filename(url: str) -> str:
 
 def print_header():
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v5.3.1 ---{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v5.6 ---{Style.RESET_ALL}")
     print(f"{Fore.CYAN}--- Powered by CrazyFire ---{Style.RESET_ALL}")
     
     st_val = f"{Fore.GREEN}ON" if CONFIG['stealth'] else f"{Fore.RED}OFF"
@@ -394,7 +400,11 @@ async def run_html_downloader():
     global STOP_PROCESS
     STOP_PROCESS = False
     urls, raw_proxies = load_urls_from_file(), load_proxies()
-    if not urls: return
+    if not urls: 
+        print(f"\n{Fore.YELLOW}[INFO] Список ссылок пуст!{Style.RESET_ALL}")
+        time.sleep(2)
+        return
+        
     favs = load_favorites()
     proxies = favs if favs else raw_proxies
     
@@ -402,11 +412,13 @@ async def run_html_downloader():
     os.system('cls' if os.name == 'nt' else 'clear')
     print(f"{Fore.CYAN}--- ЗАПУСК СКАЧИВАНИЯ ---{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}[ПРОБЕЛ - Пауза/Отмена]{Style.RESET_ALL}\n")
+    print(f"{Fore.WHITE}Всего ссылок в очереди: {len(urls)}{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
         sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
         to_do, loop_cnt = urls, 1
+        
         while to_do and not STOP_PROCESS:
             tasks = [download_html_task(browser, u, sem, proxies) for u in to_do]
             res = await tqdm.gather(*tasks, desc=f"Круг {loop_cnt}")
@@ -443,51 +455,118 @@ async def run_category_parser():
     c_idx = interactive_menu([c[0] for c in cats] + ["Назад"], "КАТЕГОРИЯ:", True)
     if c_idx == 6: return
     
-    print(f"\n{Fore.GREEN}Количество страниц: {Style.RESET_ALL}", end="", flush=True)
-    p_input = ""
-    while True:
-        char = msvcrt.getch()
-        if char == b'\r': break
-        if char.isdigit(): p_input += char.decode(); print(char.decode(), end="", flush=True)
-    if not p_input: return
-    p_num = int(p_input)
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print(f"{Fore.CYAN}--- НАСТРОЙКА ПАРСИНГА ---{Style.RESET_ALL}\n")
+    
+    try:
+        start_p = int(input(f"{Fore.GREEN}Введите начальную страницу (например, 1): {Style.RESET_ALL}").strip())
+        end_p = int(input(f"{Fore.GREEN}Введите конечную страницу (например, 50): {Style.RESET_ALL}").strip())
+    except ValueError:
+        print(f"\n{Fore.RED}[ERROR] Необходимо вводить только цифры! Возврат в меню.{Style.RESET_ALL}")
+        time.sleep(2)
+        return
+
+    if start_p < 1: start_p = 1
+    if end_p < start_p: end_p = start_p
     
     favs = load_favorites()
     proxies = favs if favs else load_proxies()
     
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"{Fore.CYAN}--- ПАРСИНГ ---{Style.RESET_ALL}\n")
+    print(f"{Fore.CYAN}--- ПАРСИНГ (Стр. {start_p} - {end_p}) ---{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}[ПРОБЕЛ - Пауза/Отмена]{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
-        all_l = []
-        for i in range(1, p_num + 1):
-            if STOP_PROCESS or check_interrupt(): break
+        
+        pages_to_parse = list(range(start_p, end_p + 1))
+        loop_cnt = 1
+        
+        while pages_to_parse and not STOP_PROCESS:
+            failed_pages = []
             
-            proxy_config = None
-            if CONFIG["use_proxy"] and proxies:
-                if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
-                proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
-                p_display = f"{CURRENT_ACTIVE_PROXY}"
-            else:
-                p_display = "Local IP"
+            for i in pages_to_parse:
+                if STOP_PROCESS or check_interrupt(): break
+                
+                proxy_config = None
+                if CONFIG["use_proxy"] and proxies:
+                    if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
+                    proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+                    p_display = f"{CURRENT_ACTIVE_PROXY}"
+                else:
+                    p_display = "Local IP"
 
-            context = await browser.new_context(proxy=proxy_config)
-            try:
-                page = await context.new_page()
-                await page.goto(f"{BASE_URL}{cats[c_idx][1]}" + (f"page/{i}/" if i > 1 else ""), wait_until='domcontentloaded', timeout=25000)
-                links = await page.locator('.b-content__inline_item-link a').evaluate_all("els => els.map(e => e.href)")
-                all_l.extend(links)
-                print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} {p_display} Стр {i}/{p_num}")
-            except Exception as e:
-                print(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Стр {i} Error: {str(e)[:30]}")
-                CURRENT_ACTIVE_PROXY = None
-            finally: await context.close()
+                context = await browser.new_context(proxy=proxy_config)
+                try:
+                    page = await context.new_page()
+                    url_to_parse = f"{BASE_URL}{cats[c_idx][1]}" + (f"page/{i}/" if i > 1 else "")
+                    
+                    links = []
+                    
+                    # Делаем 2 попытки (обычная загрузка + перезагрузка если не дотянули до 36)
+                    for attempt in range(1, 3):
+                        if STOP_PROCESS: break
+                        try: 
+                            if attempt == 1:
+                                await page.goto(url_to_parse, wait_until='domcontentloaded', timeout=15000)
+                            else:
+                                print(f"  {Fore.YELLOW}[RELOAD]{Style.RESET_ALL} Найдено {len(links)}/36. Перезагрузка...")
+                                await page.reload(wait_until='domcontentloaded', timeout=15000)
+                        except: pass 
+
+                        poll_start = time.time()
+                        last_count = 0
+                        stable_time = time.time()
+                        
+                        while time.time() - poll_start < 12:
+                            try:
+                                links = await page.locator('.b-content__inline_item-link a').evaluate_all("els => els.map(e => e.href)")
+                                if len(links) >= 36:
+                                    break
+                                    
+                                # Проверка на зависание (если счетчик не меняется 3 секунды - идем дальше)
+                                if len(links) != last_count:
+                                    last_count = len(links)
+                                    stable_time = time.time()
+                                elif len(links) > 0 and time.time() - stable_time > 3:
+                                    break
+                            except: pass
+                            await asyncio.sleep(0.5)
+                            
+                        # Если набрали 36, выходим из цикла попыток и не перезагружаем
+                        if len(links) >= 36:
+                            break
+
+                    if len(links) > 0:
+                        added = append_to_parser_file(links)
+                        print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} {p_display} Стр {i}/{end_p} | Найдено: {len(links)} | Новых: {added}")
+                    else:
+                        raise Exception("Ссылки не найдены")
+                        
+                except Exception as e:
+                    print(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Стр {i} Error: {str(e)[:30]}")
+                    CURRENT_ACTIVE_PROXY = None
+                    failed_pages.append(i)
+                finally: 
+                    await context.close()
+            
+            if STOP_PROCESS or not failed_pages: break
+            
+            if CONFIG["infinite_retry"]:
+                print(f"\n{Fore.YELLOW}[RETRY]{Style.RESET_ALL} Повтор неудачных страниц. Круг {loop_cnt+1}...")
+                pages_to_parse = failed_pages
+                loop_cnt += 1
+                time.sleep(1)
+            else:
+                idx = interactive_menu(["Повторить неудачные страницы", "Завершить"], f"Ошибок парсинга: {len(failed_pages)}", False)
+                if idx == 1: break
+                pages_to_parse = failed_pages
+                loop_cnt += 1
+
         await browser.close()
     
-    if all_l and not STOP_PROCESS: 
-        save_urls_to_file(all_l)
-        print(f"\n{Fore.GREEN}[SUCCESS] Готово! Нажмите клавишу...{Style.RESET_ALL}")
+    if not STOP_PROCESS:
+        print(f"\n{Fore.GREEN}[SUCCESS] Парсинг завершен! Данные сохранены в {PARSER_FILE}{Style.RESET_ALL}")
         msvcrt.getch()
 
 async def run_franchise_parser():
@@ -513,10 +592,12 @@ async def run_franchise_parser():
             page = await ctx.new_page()
             await page.goto(url, wait_until='domcontentloaded')
             links = await page.locator('.b-post__partcontent_item .td.title a').evaluate_all("els => els.map(e => e.href)")
-            if links: save_urls_to_file(links)
+            if links: 
+                added = append_to_parser_file(links)
+                print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} Добавлено {added} ссылок.")
         except: pass
         await browser.close()
-    print(f"\n{Fore.GREEN}[SUCCESS] Готово!{Style.RESET_ALL}")
+    print(f"\n{Fore.GREEN}[SUCCESS] Готово! Данные в {PARSER_FILE}{Style.RESET_ALL}")
     msvcrt.getch()
 
 # ==========================================
@@ -556,7 +637,7 @@ async def main_menu():
             "Скачивание HTML (Загрузка)", 
             "Менеджер Прокси", 
             "Настройки программы", 
-            "Очистить список ссылок",
+            "Очистить списки ссылок",
             "Выход"
         ], "ГЛАВНОЕ МЕНЮ:", show_nav=False)
         
