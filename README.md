@@ -8,6 +8,9 @@
   <img src="https://img.shields.io/badge/API-Verification_Web-yellow" alt="Web Verification">
 </p>
 
+## 🌐 Ссылка на проект
+> ### [**🔗 ПЕРЕЙТИ НА САЙТ CRAZYFLIX**](https://crazyflix-218958038563.us-west1.run.app)
+
 ## 📖 Documentation / Документация
 
 > [!IMPORTANT]
