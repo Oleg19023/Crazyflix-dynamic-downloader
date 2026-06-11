@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Сканирует Rezka.ag, подсвечивает фильмы по базе CrazyFlix и позволяет собирать недостающие ссылки.
+// @version      2.2
+// @description  Сканер Rezka.ag: классические рамки border, без кеширования, кнопки поверх постеров.
 // @author       W1zarD
 // @match        *://rezka.ag/*
 // @match        *://*.rezka.ag/*
@@ -25,292 +25,272 @@
     const STORE_KEY = 'crazyflix_saved_urls';
 
     let knownIds = new Set();
+    let hideKnownMode = GM_getValue('cf_hide_known', false);
 
     // ==========================================
     // СТИЛИ (CSS)
     // ==========================================
     GM_addStyle(`
-        .cf-card-green { border: 3px solid #4caf50 !important; border-radius: 5px; box-sizing: border-box; position: relative; }
-        .cf-card-red { border: 3px solid #ff4d4d !important; border-radius: 5px; box-sizing: border-box; position: relative; }
-
-        .cf-save-btn {
-            position: absolute; top: 5px; left: 5px; z-index: 99;
-            background: #ff4d4d; color: white; border: none; border-radius: 3px;
-            padding: 5px 8px; font-size: 12px; font-weight: bold; cursor: pointer;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.5); transition: 0.2s;
+        /* Резервируем место под рамку заранее, чтобы контент не дергался */
+        .b-content__inline_item { 
+            border: 3px solid transparent !important; 
+            box-sizing: border-box !important; 
+            position: relative !important;
+            transition: border-color 0.3s;
         }
-        .cf-save-btn:hover { background: #ff1a1a; transform: scale(1.05); }
-        .cf-save-btn.saved { background: #4caf50; pointer-events: none; }
+        
+        .cf-card-green { border-color: #4caf50 !important; opacity: 0.9; }
+        .cf-card-red { border-color: #ff4d4d !important; }
+        
+        /* Скрытие известных */
+        .cf-hide-known .cf-card-green { display: none !important; }
 
+        /* Кнопка поверх постера */
+        .cf-save-btn {
+            position: absolute !important; 
+            top: 5px !important; 
+            right: 5px !important; 
+            z-index: 999 !important;
+            background: #ff4d4d; 
+            color: white; 
+            border: none; 
+            border-radius: 4px;
+            padding: 4px 8px; 
+            font-size: 11px; 
+            font-weight: bold; 
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6); 
+            transition: 0.2s;
+        }
+        .cf-save-btn:hover { background: #ff1a1a; transform: scale(1.1); }
+        .cf-save-btn.saved { background: #4caf50; }
+
+        /* Главная кнопка менеджера */
         #cf-manager-btn {
-            position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+            position: fixed; bottom: 20px; right: 20px; z-index: 10000;
             background: #00bcd4; color: white; border: none; border-radius: 50px;
             padding: 10px 20px; font-size: 14px; font-weight: bold; cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: 0.3s;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            display: flex; align-items: center; gap: 8px;
         }
-        #cf-manager-btn:hover { background: #0097a7; box-shadow: 0 6px 8px rgba(0,0,0,0.5); }
+        #cf-manager-badge { background: white; color: #00bcd4; border-radius: 10px; padding: 1px 6px; font-size: 11px; }
 
+        /* Модальное окно */
         #cf-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8); z-index: 10000; justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.8); z-index: 20000; justify-content: center; align-items: center;
         }
         #cf-modal-content {
-            background: #222; color: #fff; width: 600px; max-width: 90%; max-height: 80%;
-            border-radius: 8px; padding: 20px; display: flex; flex-direction: column;
-            box-shadow: 0 0 20px rgba(0,188,212,0.5); border: 1px solid #00bcd4;
+            background: #1a1a1a; color: #fff; width: 600px; max-width: 95%; max-height: 85%;
+            border-radius: 10px; padding: 20px; display: flex; flex-direction: column;
+            border: 2px solid #00bcd4;
         }
-        #cf-modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px; margin-bottom: 10px; }
-        #cf-modal-header h2 { margin: 0; font-size: 20px; color: #00bcd4; }
-        #cf-close-modal { background: none; border: none; color: #ff4d4d; font-size: 24px; cursor: pointer; }
-
-        #cf-url-list { flex-grow: 1; overflow-y: auto; background: #111; padding: 10px; border-radius: 4px; margin-bottom: 15px; }
-        .cf-url-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #333; }
-        .cf-url-text { word-break: break-all; font-size: 13px; color: #bbb; padding-right: 10px; }
-        .cf-delete-item { background: #ff4d4d; color: white; border: none; border-radius: 3px; padding: 3px 8px; cursor: pointer; font-size: 12px; }
-        .cf-delete-item:hover { background: #ff1a1a; }
+        #cf-url-list { flex-grow: 1; overflow-y: auto; background: #000; padding: 10px; border-radius: 5px; margin: 15px 0; border: 1px solid #333; }
+        .cf-url-item { font-size: 12px; padding: 5px 0; border-bottom: 1px solid #222; color: #00bcd4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         .cf-modal-footer { display: flex; gap: 10px; flex-wrap: wrap; }
-        .cf-action-btn { flex: 1; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; color: white; }
-        .cf-btn-copy { background: #4caf50; } .cf-btn-copy:hover { background: #388e3c; }
-        .cf-btn-export { background: #2196f3; } .cf-btn-export:hover { background: #1976d2; }
-        .cf-btn-clear { background: #f44336; } .cf-btn-clear:hover { background: #d32f2f; }
+        .cf-action-btn { flex: 1; padding: 12px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; color: white; }
+        .cf-btn-copy { background: #4caf50; } 
+        .cf-btn-export { background: #2196f3; }
+        .cf-btn-clear { background: #f44336; }
+        .cf-btn-save-all { background: #ff9800; width: 100%; margin-bottom: 10px; }
     `);
 
     // ==========================================
-    // ЛОГИКА РАБОТЫ С ДАННЫМИ
+    // ЛОГИКА ДАННЫХ
     // ==========================================
+    
     function getSavedUrls() {
         return JSON.parse(GM_getValue(STORE_KEY, '[]'));
     }
 
+    function updateBadge() {
+        const badge = document.getElementById('cf-manager-badge');
+        if(badge) badge.innerText = getSavedUrls().length;
+    }
+
     function saveUrl(url) {
         let urls = getSavedUrls();
-        if (!urls.includes(url)) {
-            urls.push(url);
+        const cleanUrl = url.split('?')[0].split('#')[0];
+        if (!urls.includes(cleanUrl)) {
+            urls.push(cleanUrl);
             GM_setValue(STORE_KEY, JSON.stringify(urls));
+            updateBadge();
         }
     }
 
-    function removeUrl(url) {
-        let urls = getSavedUrls();
-        urls = urls.filter(u => u !== url);
-        GM_setValue(STORE_KEY, JSON.stringify(urls));
-        renderModalList();
-    }
-
-    function clearAllUrls() {
-        if(confirm("Точно удалить все сохраненные ссылки?")) {
-            GM_setValue(STORE_KEY, '[]');
-            renderModalList();
-        }
-    }
-
-    // Универсальный извлекатель ID из ссылок Резки (например, из "12345-film.html" достает "12345")
-    function extractIdFromUrl(url) {
-        const match = url.match(/\/(\d+)-[a-zA-Z0-9_-]+\.html/);
-        return match ? match[1] : null;
-    }
-
-    // Загрузка базы CrazyFlix
     function fetchDatabase() {
-        console.log("[CrazyFlix] Загрузка базы данных...");
+        console.log("[CrazyFlix] Загрузка актуальной БД...");
         GM_xmlhttpRequest({
             method: "GET",
             url: DB_URL,
+            nocache: true,
             onload: function(response) {
                 if (response.status === 200) {
                     const text = response.responseText;
-                    // Ищем все вхождения ID в JSON, чтобы не зависеть от структуры файла
                     const regex = /(\d+)-[a-zA-Z0-9_-]+\.html/g;
                     let match;
+                    knownIds.clear();
                     while ((match = regex.exec(text)) !== null) {
                         knownIds.add(match[1]);
                     }
-                    console.log(`[CrazyFlix] База загружена. Найдено уникальных ID: ${knownIds.size}`);
-                    processCards(); // Запускаем проверку после загрузки
-                } else {
-                    console.error("[CrazyFlix] Ошибка загрузки БД:", response.status);
+                    console.log(`[CrazyFlix] Синхронизировано: ${knownIds.size} фильмов.`);
+                    applyMode();
+                    processCards();
                 }
             }
         });
     }
 
-    // ==========================================
-    // ЛОГИКА ОБРАБОТКИ КАРТОЧЕК
-    // ==========================================
+    function applyMode() {
+        if (hideKnownMode) document.body.classList.add('cf-hide-known');
+        else document.body.classList.remove('cf-hide-known');
+    }
+
+    function extractIdFromUrl(url) {
+        const match = url.match(/\/(\d+)-[a-zA-Z0-9_-]+\.html/);
+        return match ? match[1] : null;
+    }
+
     function processCards() {
-        // Находим все карточки на странице
         const cards = document.querySelectorAll('.b-content__inline_item');
+        const currentSaved = getSavedUrls();
 
         cards.forEach(card => {
-            // Если карточка уже обработана, пропускаем
-            if (card.classList.contains('cf-processed')) return;
-
             const linkElement = card.querySelector('.b-content__inline_item-link a');
-            if (!linkElement) return;
+            if (!linkElement || card.classList.contains('cf-processed')) return;
 
             const url = linkElement.href;
             const id = extractIdFromUrl(url);
 
             if (id) {
                 if (knownIds.has(id)) {
-                    // Фильм ЕСТЬ в базе
                     card.classList.add('cf-card-green');
                 } else {
-                    // Фильма НЕТ в базе
                     card.classList.add('cf-card-red');
-
-                    // Создаем кнопку сохранения
-                    const saveBtn = document.createElement('button');
-                    saveBtn.className = 'cf-save-btn';
-                    saveBtn.innerHTML = '💾 Сохранить';
-
-                    // Если ссылка уже была сохранена в локальное хранилище ранее
-                    const currentSaved = getSavedUrls();
-                    if (currentSaved.includes(url)) {
-                        saveBtn.innerHTML = '✔️ Сохранено';
-                        saveBtn.classList.add('saved');
-                    }
-
-                    saveBtn.onclick = (e) => {
-                        e.preventDefault(); // Чтобы не переходило по ссылке
-                        e.stopPropagation();
-                        saveUrl(url);
-                        saveBtn.innerHTML = '✔️ Сохранено';
-                        saveBtn.classList.add('saved');
-                    };
-
-                    // Вставляем кнопку внутрь обертки постера, чтобы она красиво висела
-                    const coverWrap = card.querySelector('.b-content__inline_item-cover');
-                    if(coverWrap) {
-                        coverWrap.style.position = 'relative'; // на всякий случай
-                        coverWrap.appendChild(saveBtn);
+                    const cover = card.querySelector('.b-content__inline_item-cover');
+                    if (cover) {
+                        const btn = document.createElement('button');
+                        btn.className = 'cf-save-btn';
+                        const isAlreadySaved = currentSaved.includes(url.split('?')[0]);
+                        btn.innerHTML = isAlreadySaved ? '✔️' : '💾 Save';
+                        if (isAlreadySaved) btn.classList.add('saved');
+                        
+                        btn.onclick = (e) => {
+                            e.preventDefault(); e.stopPropagation();
+                            saveUrl(url);
+                            btn.innerHTML = '✔️'; btn.classList.add('saved');
+                        };
+                        cover.appendChild(btn);
                     }
                 }
             }
-            card.classList.add('cf-processed'); // Помечаем как проверенную
+            card.classList.add('cf-processed');
         });
     }
 
-    // ==========================================
-    // ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС (UI)
-    // ==========================================
     function createUI() {
-        // Плавающая кнопка
         const managerBtn = document.createElement('button');
         managerBtn.id = 'cf-manager-btn';
-        managerBtn.innerText = '⚙️ CrazyFlix Manager';
+        managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">0</span>`;
         document.body.appendChild(managerBtn);
 
-        // Модальное окно
         const modal = document.createElement('div');
         modal.id = 'cf-modal';
         modal.innerHTML = `
             <div id="cf-modal-content">
-                <div id="cf-modal-header">
-                    <h2>📥 Сохраненные ссылки (<span id="cf-count">0</span>)</h2>
-                    <button id="cf-close-modal">✖</button>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0; color:#00bcd4; font-size:20px;">CrazyFlix Panel</h2>
+                    <button id="cf-close" style="background:none; border:none; color:#ff4d4d; font-size:30px; cursor:pointer;">&times;</button>
+                </div>
+                <div style="margin: 15px 0; font-size: 14px; background:#333; padding:10px; border-radius:5px;">
+                    <input type="checkbox" id="cf-hide-known-chk" ${hideKnownMode ? 'checked' : ''}>
+                    <label for="cf-hide-known-chk" style="cursor:pointer; user-select:none;">Скрывать то, что уже есть в базе</label>
                 </div>
                 <div id="cf-url-list"></div>
+                <button id="cf-save-all" class="cf-action-btn cf-btn-save-all">⚡ Сохранить всё красное со страницы</button>
                 <div class="cf-modal-footer">
-                    <button id="cf-btn-copy" class="cf-action-btn cf-btn-copy">📋 Копировать все</button>
-                    <button id="cf-btn-export" class="cf-action-btn cf-btn-export">💾 Выгрузить в .txt</button>
-                    <button id="cf-btn-clear" class="cf-action-btn cf-btn-clear">🗑 Очистить базу</button>
+                    <button id="cf-copy" class="cf-action-btn cf-btn-copy">📋 Копировать</button>
+                    <button id="cf-export" class="cf-action-btn cf-btn-export">💾 .TXT</button>
+                    <button id="cf-clear" class="cf-action-btn cf-btn-clear">🗑 Очистить</button>
                 </div>
             </div>
         `;
         document.body.appendChild(modal);
 
-        // События кнопок модалки
-        managerBtn.onclick = () => {
-            renderModalList();
-            modal.style.display = 'flex';
+        managerBtn.onclick = () => { renderList(); modal.style.display = 'flex'; };
+        document.getElementById('cf-close').onclick = () => modal.style.display = 'none';
+        
+        document.getElementById('cf-hide-known-chk').onchange = (e) => {
+            hideKnownMode = e.target.checked;
+            GM_setValue('cf_hide_known', hideKnownMode);
+            applyMode();
         };
-        document.getElementById('cf-close-modal').onclick = () => modal.style.display = 'none';
-        modal.onclick = (e) => { if(e.target === modal) modal.style.display = 'none'; };
 
-        document.getElementById('cf-btn-clear').onclick = clearAllUrls;
-
-        document.getElementById('cf-btn-copy').onclick = () => {
-            const urls = getSavedUrls().join('\n');
-            if(!urls) return alert("Список пуст!");
-            navigator.clipboard.writeText(urls).then(() => {
-                const btn = document.getElementById('cf-btn-copy');
-                btn.innerText = "✔️ Скопировано!";
-                setTimeout(() => btn.innerText = "📋 Копировать все", 2000);
+        document.getElementById('cf-save-all').onclick = () => {
+            const redCards = document.querySelectorAll('.cf-card-red');
+            let added = 0;
+            redCards.forEach(card => {
+                const link = card.querySelector('.b-content__inline_item-link a');
+                const btn = card.querySelector('.cf-save-btn');
+                if(link && btn && !btn.classList.contains('saved')) {
+                    saveUrl(link.href);
+                    btn.innerHTML = '✔️'; btn.classList.add('saved');
+                    added++;
+                }
             });
+            renderList();
+            updateBadge();
         };
 
-        document.getElementById('cf-btn-export').onclick = () => {
-            const urls = getSavedUrls().join('\n');
-            if(!urls) return alert("Список пуст!");
-            const blob = new Blob([urls], { type: 'text/plain' });
+        document.getElementById('cf-clear').onclick = () => {
+            if(confirm("Очистить список сохраненных ссылок?")) {
+                GM_setValue(STORE_KEY, '[]');
+                renderList();
+                updateBadge();
+                document.querySelectorAll('.cf-save-btn').forEach(b => {
+                    b.innerHTML = '💾 Save';
+                    b.classList.remove('saved');
+                });
+            }
+        };
+
+        document.getElementById('cf-copy').onclick = () => {
+            const text = getSavedUrls().join('\n');
+            navigator.clipboard.writeText(text).then(() => alert("Скопировано в буфер!"));
+        };
+
+        document.getElementById('cf-export').onclick = () => {
+            const text = getSavedUrls().join('\n');
+            if(!text) return alert("Список пуст!");
+            const blob = new Blob([text], {type: 'text/plain'});
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = 'urls_to_download.txt';
-            document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
         };
+
+        updateBadge();
     }
 
-    // Отрисовка списка внутри модального окна
-    function renderModalList() {
-        const listDiv = document.getElementById('cf-url-list');
-        const countSpan = document.getElementById('cf-count');
+    function renderList() {
+        const list = document.getElementById('cf-url-list');
         const urls = getSavedUrls();
-
-        listDiv.innerHTML = '';
-        countSpan.innerText = urls.length;
-
-        if (urls.length === 0) {
-            listDiv.innerHTML = '<div style="text-align:center; color:#777; margin-top: 20px;">Нет сохраненных ссылок</div>';
-            return;
-        }
-
+        list.innerHTML = urls.length ? '' : '<p style="text-align:center; color:#777;">Список пуст</p>';
         urls.forEach(url => {
             const item = document.createElement('div');
             item.className = 'cf-url-item';
-
-            const text = document.createElement('div');
-            text.className = 'cf-url-text';
-            text.innerText = url;
-
-            const delBtn = document.createElement('button');
-            delBtn.className = 'cf-delete-item';
-            delBtn.innerText = 'Удалить';
-            delBtn.onclick = () => removeUrl(url);
-
-            item.appendChild(text);
-            item.appendChild(delBtn);
-            listDiv.appendChild(item);
+            item.innerText = url;
+            list.appendChild(item);
         });
     }
 
-    // ==========================================
-    // ЗАПУСК И НАБЛЮДАТЕЛЬ (MutationObserver)
-    // ==========================================
-
-    // Запускаем сборку интерфейса
     createUI();
-
-    // Запускаем получение БД (после загрузки вызовет processCards)
     fetchDatabase();
 
-    // Наблюдатель за DOM (Следит за AJAX-подгрузкой новых фильмов при прокрутке страницы или переключении фильтров)
-    const observer = new MutationObserver((mutations) => {
-        let shouldProcess = false;
-        for (const mutation of mutations) {
-            if (mutation.addedNodes.length > 0) {
-                shouldProcess = true;
-                break;
-            }
-        }
-        if (shouldProcess && knownIds.size > 0) {
-            processCards();
-        }
+    const observer = new MutationObserver(() => {
+        if (knownIds.size > 0) processCards();
     });
-
     observer.observe(document.body, { childList: true, subtree: true });
 
 })();
