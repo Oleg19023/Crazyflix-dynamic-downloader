@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Сканер Rezka.ag: классические рамки border, без кеширования, кнопки поверх постеров.
 // @author       W1zarD
 // @match        *://rezka.ag/*
@@ -48,8 +48,7 @@
         /* Кнопка поверх постера */
         .cf-save-btn {
             position: absolute !important; 
-            top: 5px !important; 
-            right: 5px !important; 
+            top: 5px !important;
             z-index: 999 !important;
             background: #ff4d4d; 
             color: white; 
