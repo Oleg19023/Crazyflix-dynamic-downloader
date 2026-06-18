@@ -21,7 +21,7 @@
 (function() {
     'use strict';
 
-    const DB_URL = "https://cdn.jsdelivr.net/gh/Oleg19023/crazyflix-api.json@main/crazyflix-api.json";
+    const DB_URL = "https://oleg19023.github.io/crazyflix-api.json/crazyflix-api.json";
     const STORE_KEY = 'crazyflix_saved_urls';
 
     let knownIds = new Set();
