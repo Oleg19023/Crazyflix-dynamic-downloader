@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  Сканер Rezka.ag: классические рамки border, без кеширования, кнопки поверх постеров.
 // @author       W1zarD
 // @match        *://rezka.ag/*
