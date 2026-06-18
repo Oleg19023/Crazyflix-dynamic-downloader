@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.4
-// @description  Сканер Rezka.ag: классические рамки border, без кеширования, кнопки поверх постеров.
+// @version      2.5
+// @description  Сканер Rezka.ag: Умная проверка загрузки БД, защита от сбоев CSS и ошибок 404.
 // @author       W1zarD
 // @match        *://rezka.ag/*
 // @match        *://*.rezka.ag/*
@@ -16,6 +16,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @connect      cdn.jsdelivr.net
+// @connect      oleg19023.github.io
 // ==/UserScript==
 
 (function() {
@@ -26,12 +27,13 @@
 
     let knownIds = new Set();
     let hideKnownMode = GM_getValue('cf_hide_known', false);
+    let dbLoaded = false; // Флаг проверки загрузки базы
 
     // ==========================================
-    // СТИЛИ (CSS)
+    // СТИЛИ (CSS) - УСИЛЕННАЯ ЗАЩИТА
     // ==========================================
     GM_addStyle(`
-        /* Резервируем место под рамку заранее, чтобы контент не дергался */
+        /* Резервируем место под рамку заранее */
         .b-content__inline_item { 
             border: 3px solid transparent !important; 
             box-sizing: border-box !important; 
@@ -39,8 +41,9 @@
             transition: border-color 0.3s;
         }
         
-        .cf-card-green { border-color: #4caf50 !important; opacity: 0.9; }
-        .cf-card-red { border-color: #ff4d4d !important; }
+        /* Двойной селектор для максимального приоритета над стилями сайта */
+        .b-content__inline_item.cf-card-green { border-color: #4caf50 !important; opacity: 0.9; }
+        .b-content__inline_item.cf-card-red { border-color: #ff4d4d !important; }
         
         /* Скрытие известных */
         .cf-hide-known .cf-card-green { display: none !important; }
@@ -48,7 +51,8 @@
         /* Кнопка поверх постера */
         .cf-save-btn {
             position: absolute !important; 
-            top: 5px !important;
+            top: 5px !important; 
+            right: 5px !important;
             z-index: 999 !important;
             background: #ff4d4d; 
             color: white; 
@@ -119,24 +123,43 @@
     }
 
     function fetchDatabase() {
+        const managerBtn = document.getElementById('cf-manager-btn');
+        if(managerBtn) managerBtn.innerHTML = `⏳ Загрузка БД...`;
+
         console.log("[CrazyFlix] Загрузка актуальной БД...");
         GM_xmlhttpRequest({
             method: "GET",
             url: DB_URL,
             nocache: true,
             onload: function(response) {
+                dbLoaded = true; // Отмечаем, что запрос завершен (успешно или нет)
+                
                 if (response.status === 200) {
                     const text = response.responseText;
-                    const regex = /(\d+)-[a-zA-Z0-9_-]+\.html/g;
+                    // Улучшенная регулярка: ищет ID независимо от спецсимволов в названии фильма
+                    const regex = /(\d+)-[^\/"]+\.html/g;
                     let match;
                     knownIds.clear();
                     while ((match = regex.exec(text)) !== null) {
                         knownIds.add(match[1]);
                     }
                     console.log(`[CrazyFlix] Синхронизировано: ${knownIds.size} фильмов.`);
-                    applyMode();
-                    processCards();
+                    if(managerBtn) managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
+                } else {
+                    // Если GitHub вернул ошибку (например 404)
+                    console.error("[CrazyFlix] Ошибка загрузки БД:", response.status);
+                    if(managerBtn) managerBtn.innerHTML = `❌ Ошибка БД (${response.status}) <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
                 }
+                
+                applyMode();
+                processCards(); // Запускаем отрисовку рамок в любом случае
+            },
+            onerror: function(err) {
+                dbLoaded = true;
+                console.error("[CrazyFlix] Сетевая ошибка при загрузке БД:", err);
+                if(managerBtn) managerBtn.innerHTML = `❌ Нет сети <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
+                applyMode();
+                processCards(); // Запускаем отрисовку рамок (все будут красными)
             }
         });
     }
@@ -147,7 +170,7 @@
     }
 
     function extractIdFromUrl(url) {
-        const match = url.match(/\/(\d+)-[a-zA-Z0-9_-]+\.html/);
+        const match = url.match(/\/(\d+)-[^\/]+\.html/);
         return match ? match[1] : null;
     }
 
@@ -287,8 +310,9 @@
     createUI();
     fetchDatabase();
 
+    // Следим за подгрузкой страницы. Обрабатываем карточки ТОЛЬКО если запрос к БД завершился
     const observer = new MutationObserver(() => {
-        if (knownIds.size > 0) processCards();
+        if (dbLoaded) processCards();
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
