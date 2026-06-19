@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.6
-// @description  Сканер Rezka.ag: Загрузка БД через GitHub Releases.
+// @version      2.7
+// @description  Сканер Rezka.ag: Мгновенная загрузка (Кеш) + Кнопка ручного обновления БД.
 // @author       W1zarD
 // @match        *://rezka.ag/*
 // @match        *://*.rezka.ag/*
@@ -22,9 +22,10 @@
 (function() {
     'use strict';
 
-    // НОВАЯ ССЫЛКА НА GITHUB RELEASES
     const DB_URL = "https://github.com/Oleg19023/crazyflix-api.json/releases/download/v1.0.0/crazyflix-api.json";
     const STORE_KEY = 'crazyflix_saved_urls';
+    const CACHE_KEY = 'crazyflix_db_cache';
+    const CACHE_TIME = 60 * 60 * 1000; // Кеш живет 1 час (если не нажать кнопку "Обновить")
 
     let knownIds = new Set();
     let hideKnownMode = GM_getValue('cf_hide_known', false);
@@ -34,7 +35,6 @@
     // СТИЛИ (CSS) 
     // ==========================================
     GM_addStyle(`
-        /* Резервируем место под рамку заранее */
         .b-content__inline_item { 
             border: 3px solid transparent !important; 
             box-sizing: border-box !important; 
@@ -42,14 +42,11 @@
             transition: border-color 0.3s;
         }
         
-        /* Двойной селектор для максимального приоритета */
         .b-content__inline_item.cf-card-green { border-color: #4caf50 !important; opacity: 0.9; }
         .b-content__inline_item.cf-card-red { border-color: #ff4d4d !important; }
         
-        /* Скрытие известных */
         .cf-hide-known .cf-card-green { display: none !important; }
 
-        /* Кнопка поверх постера */
         .cf-save-btn {
             position: absolute !important; 
             top: 5px !important; 
@@ -69,7 +66,6 @@
         .cf-save-btn:hover { background: #ff1a1a; transform: scale(1.1); }
         .cf-save-btn.saved { background: #4caf50; }
 
-        /* Главная кнопка менеджера */
         #cf-manager-btn {
             position: fixed; bottom: 20px; right: 20px; z-index: 10000;
             background: #00bcd4; color: white; border: none; border-radius: 50px;
@@ -79,7 +75,6 @@
         }
         #cf-manager-badge { background: white; color: #00bcd4; border-radius: 10px; padding: 1px 6px; font-size: 11px; }
 
-        /* Модальное окно */
         #cf-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.8); z-index: 20000; justify-content: center; align-items: center;
@@ -98,6 +93,7 @@
         .cf-btn-export { background: #2196f3; }
         .cf-btn-clear { background: #f44336; }
         .cf-btn-save-all { background: #ff9800; width: 100%; margin-bottom: 10px; }
+        .cf-btn-sync { background: #673ab7; width: 100%; margin-bottom: 10px; }
     `);
 
     // ==========================================
@@ -123,26 +119,49 @@
         }
     }
 
-    function fetchDatabase() {
+    // Загрузка базы с УМНЫМ КЕШИРОВАНИЕМ
+    function fetchDatabase(forceRefresh = false) {
         const managerBtn = document.getElementById('cf-manager-btn');
-        if(managerBtn) managerBtn.innerHTML = `⏳ Загрузка БД...`;
+        
+        // Если не просили принудительно обновить, проверяем кеш
+        if (!forceRefresh) {
+            const cached = GM_getValue(CACHE_KEY, null);
+            if (cached && (Date.now() - cached.time < CACHE_TIME)) {
+                console.log("[CrazyFlix] БД мгновенно загружена из кеша браузера.");
+                knownIds = new Set(cached.data);
+                dbLoaded = true;
+                if(managerBtn) managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
+                applyMode();
+                processCards();
+                return;
+            }
+        }
 
-        console.log("[CrazyFlix] Загрузка БД из GitHub Releases...");
+        // Если кеш устарел или нажата кнопка "Обновить"
+        if(managerBtn) managerBtn.innerHTML = `⏳ Скачивание БД...`;
+        console.log("[CrazyFlix] Скачивание свежей БД из GitHub Releases...");
+
         GM_xmlhttpRequest({
             method: "GET",
-            url: DB_URL,
+            url: DB_URL + (forceRefresh ? "?t=" + Date.now() : ""), // Обход кеша провайдера
             nocache: true,
             onload: function(response) {
                 dbLoaded = true; 
                 
-                if (response.status === 200) {
+                if (response.status === 200 || response.status === 304) {
                     const text = response.responseText;
                     const regex = /(\d+)-[^\/"]+\.html/g;
                     let match;
                     knownIds.clear();
+                    const idsArray = [];
                     while ((match = regex.exec(text)) !== null) {
                         knownIds.add(match[1]);
+                        idsArray.push(match[1]);
                     }
+                    
+                    // Сохраняем новую базу в кеш браузера
+                    GM_setValue(CACHE_KEY, { time: Date.now(), data: idsArray });
+                    
                     console.log(`[CrazyFlix] Синхронизировано: ${knownIds.size} фильмов.`);
                     if(managerBtn) managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
                 } else {
@@ -230,6 +249,7 @@
                 </div>
                 <div id="cf-url-list"></div>
                 <button id="cf-save-all" class="cf-action-btn cf-btn-save-all">⚡ Сохранить всё красное со страницы</button>
+                <button id="cf-sync-db" class="cf-action-btn cf-btn-sync">🔄 Обновить базу данных с GitHub</button>
                 <div class="cf-modal-footer">
                     <button id="cf-copy" class="cf-action-btn cf-btn-copy">📋 Копировать</button>
                     <button id="cf-export" class="cf-action-btn cf-btn-export">💾 .TXT</button>
@@ -246,6 +266,12 @@
             hideKnownMode = e.target.checked;
             GM_setValue('cf_hide_known', hideKnownMode);
             applyMode();
+        };
+
+        // Кнопка обновления БД вручную
+        document.getElementById('cf-sync-db').onclick = () => {
+            fetchDatabase(true); // Запускаем принудительное скачивание
+            modal.style.display = 'none'; // Закрываем окно, чтобы видеть процесс на кнопке
         };
 
         document.getElementById('cf-save-all').onclick = () => {
