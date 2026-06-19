@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      2.8
 // @description  Сканер Rezka.ag: Мгновенная загрузка (Кеш) + Кнопка ручного обновления БД.
 // @author       W1zarD
 // @match        *://rezka.ag/*
