@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.5
-// @description  Сканер Rezka.ag: Умная проверка загрузки БД, защита от сбоев CSS и ошибок 404.
+// @version      2.6
+// @description  Сканер Rezka.ag: Загрузка БД через GitHub Releases.
 // @author       W1zarD
 // @match        *://rezka.ag/*
 // @match        *://*.rezka.ag/*
@@ -15,22 +15,23 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
-// @connect      cdn.jsdelivr.net
-// @connect      oleg19023.github.io
+// @connect      github.com
+// @connect      githubusercontent.com
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    const DB_URL = "https://oleg19023.github.io/crazyflix-api.json/crazyflix-api.json";
+    // НОВАЯ ССЫЛКА НА GITHUB RELEASES
+    const DB_URL = "https://github.com/Oleg19023/crazyflix-api.json/releases/download/v1.0.0/crazyflix-api.json";
     const STORE_KEY = 'crazyflix_saved_urls';
 
     let knownIds = new Set();
     let hideKnownMode = GM_getValue('cf_hide_known', false);
-    let dbLoaded = false; // Флаг проверки загрузки базы
+    let dbLoaded = false; 
 
     // ==========================================
-    // СТИЛИ (CSS) - УСИЛЕННАЯ ЗАЩИТА
+    // СТИЛИ (CSS) 
     // ==========================================
     GM_addStyle(`
         /* Резервируем место под рамку заранее */
@@ -41,7 +42,7 @@
             transition: border-color 0.3s;
         }
         
-        /* Двойной селектор для максимального приоритета над стилями сайта */
+        /* Двойной селектор для максимального приоритета */
         .b-content__inline_item.cf-card-green { border-color: #4caf50 !important; opacity: 0.9; }
         .b-content__inline_item.cf-card-red { border-color: #ff4d4d !important; }
         
@@ -126,17 +127,16 @@
         const managerBtn = document.getElementById('cf-manager-btn');
         if(managerBtn) managerBtn.innerHTML = `⏳ Загрузка БД...`;
 
-        console.log("[CrazyFlix] Загрузка актуальной БД...");
+        console.log("[CrazyFlix] Загрузка БД из GitHub Releases...");
         GM_xmlhttpRequest({
             method: "GET",
             url: DB_URL,
             nocache: true,
             onload: function(response) {
-                dbLoaded = true; // Отмечаем, что запрос завершен (успешно или нет)
+                dbLoaded = true; 
                 
                 if (response.status === 200) {
                     const text = response.responseText;
-                    // Улучшенная регулярка: ищет ID независимо от спецсимволов в названии фильма
                     const regex = /(\d+)-[^\/"]+\.html/g;
                     let match;
                     knownIds.clear();
@@ -146,20 +146,19 @@
                     console.log(`[CrazyFlix] Синхронизировано: ${knownIds.size} фильмов.`);
                     if(managerBtn) managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
                 } else {
-                    // Если GitHub вернул ошибку (например 404)
                     console.error("[CrazyFlix] Ошибка загрузки БД:", response.status);
                     if(managerBtn) managerBtn.innerHTML = `❌ Ошибка БД (${response.status}) <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
                 }
                 
                 applyMode();
-                processCards(); // Запускаем отрисовку рамок в любом случае
+                processCards(); 
             },
             onerror: function(err) {
                 dbLoaded = true;
                 console.error("[CrazyFlix] Сетевая ошибка при загрузке БД:", err);
                 if(managerBtn) managerBtn.innerHTML = `❌ Нет сети <span id="cf-manager-badge">${getSavedUrls().length}</span>`;
                 applyMode();
-                processCards(); // Запускаем отрисовку рамок (все будут красными)
+                processCards(); 
             }
         });
     }
@@ -310,7 +309,6 @@
     createUI();
     fetchDatabase();
 
-    // Следим за подгрузкой страницы. Обрабатываем карточки ТОЛЬКО если запрос к БД завершился
     const observer = new MutationObserver(() => {
         if (dbLoaded) processCards();
     });
