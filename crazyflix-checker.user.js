@@ -25,7 +25,7 @@
     const DB_URL = "https://github.com/Oleg19023/crazyflix-api.json/releases/download/v1.0.0/crazyflix-api.json";
     const STORE_KEY = 'crazyflix_saved_urls';
     const CACHE_KEY = 'crazyflix_db_cache';
-    const CACHE_TIME = 60 * 60 * 1000; // Кеш живет 1 час (если не нажать кнопку "Обновить")
+    const CACHE_TIME = 60 * 60 * 1000;
 
     let knownIds = new Set();
     let hideKnownMode = GM_getValue('cf_hide_known', false);
