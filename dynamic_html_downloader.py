@@ -1,15 +1,12 @@
 """
 ------------------------------------------------------------------------------
 SOFTWARE: CrazyFlix Downloader HTML
-VERSION: 5.6
+VERSION: 6.5
 
 АВТОРСКИЕ ПРАВА (C) 2026 CrazyFire. ВСЕ ПРАВА ЗАЩИЩЕНЫ.
 
 Разработано и поддерживается под эгидой CrazyFire.
 Ведущий разработчик и владелец: W1zarD
-
-Данный программный код является интеллектуальной собственностью CrazyFire
-и предназначен исключительно для внутренних нужд экосистемы CrazyFlix.
 ------------------------------------------------------------------------------
 """
 
@@ -25,7 +22,6 @@ from playwright.async_api import async_playwright, TimeoutError
 from urllib.parse import urlparse
 from colorama import Fore, Style, init
 from tqdm.asyncio import tqdm
-from fake_useragent import UserAgent
 
 init(autoreset=True)
 
@@ -49,7 +45,7 @@ CONFIG = {
     "stealth": True,
     "adblock": True,
     "fast_load": True,
-    "use_proxy": True,
+    "use_proxy": False,
     "infinite_retry": False
 }
 
@@ -61,6 +57,17 @@ BROWSER_ARGS = [
     '--no-default-browser-check',
     '--hide-scrollbars'
 ]
+
+STEALTH_JS = """
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    if (!window.chrome) { window.chrome = { runtime: {} }; }
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+    );
+"""
 
 CURRENT_ACTIVE_PROXY = None
 STOP_PROCESS = False
@@ -75,7 +82,6 @@ def load_urls_from_file() -> list:
         if os.path.exists(file):
             with open(file, 'r', encoding='utf-8') as f:
                 urls.extend([l.strip() for l in f if l.strip() and not l.startswith('#')])
-    
     seen = set()
     return [x for x in urls if not (x in seen or seen.add(x))]
 
@@ -97,12 +103,9 @@ def append_to_parser_file(new_urls: list):
 
 def clear_url_file():
     print(f"\n{Fore.YELLOW}Вы уверены, что хотите очистить все списки ссылок (Y/N)?: {Style.RESET_ALL}", end="", flush=True)
-    
     raw_char = msvcrt.getch()
-    try:
-        confirm = raw_char.decode('cp866').lower() 
-    except:
-        confirm = raw_char.decode('utf-8', errors='ignore').lower()
+    try: confirm = raw_char.decode('cp866').lower() 
+    except: confirm = raw_char.decode('utf-8', errors='ignore').lower()
 
     if confirm == 'y' or confirm == 'г':
         if os.path.exists(URL_FILE):
@@ -142,8 +145,8 @@ def clean_filename(url: str) -> str:
 
 def print_header():
     os.system('cls' if os.name == 'nt' else 'clear')
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v5.6 ---{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}--- Powered by CrazyFire ---{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- CrazyFlix Downloader HTML by W1zarD v6.5 ---{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}--- Powered by CrazyFire (Persistent Session Engine) ---{Style.RESET_ALL}")
     
     st_val = f"{Fore.GREEN}ON" if CONFIG['stealth'] else f"{Fore.RED}OFF"
     ad_val = f"{Fore.GREEN}ON" if CONFIG['adblock'] else f"{Fore.RED}OFF"
@@ -298,8 +301,8 @@ async def run_proxy_manager():
 #       РЕЖИМ 2: СКАЧИВАНИЕ
 # ==========================================
 
-async def download_html_task(browser, url, semaphore, proxy_list):
-    global CURRENT_ACTIVE_PROXY, STOP_PROCESS
+async def download_html_task(context, url, semaphore):
+    global STOP_PROCESS
     if STOP_PROCESS: return (url, False)
     
     async with semaphore:
@@ -314,40 +317,69 @@ async def download_html_task(browser, url, semaphore, proxy_list):
             tqdm.write(f"{Fore.MAGENTA}[SKIP]{Style.RESET_ALL} Файл уже скачан.")
             return (url, True)
 
-        proxy_config = None
-        if CONFIG["use_proxy"] and proxy_list:
-            if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxy_list)
-            proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
-            p_display = f"{CURRENT_ACTIVE_PROXY}"
-        else:
-            CURRENT_ACTIVE_PROXY = None
-            p_display = "Local IP"
-        
-        tqdm.write(f"{Fore.CYAN}[INIT]{Style.RESET_ALL} Настройка сессии... Proxy: {p_display}")
-        
-        context = await browser.new_context(
-            user_agent=UserAgent().random if CONFIG['stealth'] else None,
-            proxy=proxy_config,
-            locale='ru-RU', timezone_id='Europe/Moscow'
-        )
-
-        async def block_ads(route):
-            if any(ad in route.request.url for ad in AD_BLOCK_LIST): await route.abort()
-            else: await route.continue_()
-
         try:
+            # Создаем вкладку внутри ЕДИНОЙ сессии (с сохраненными куками Anubis!)
             page = await context.new_page()
+            
+            if CONFIG['stealth']:
+                await page.add_init_script(STEALTH_JS)
+                
+            async def block_ads(route):
+                if any(ad in route.request.url for ad in AD_BLOCK_LIST): await route.abort()
+                else: await route.continue_()
+
             if CONFIG['adblock']: await page.route("**/*", block_ads)
-            await page.add_init_script("window.open = () => { return null; }; Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             
             w_state = 'domcontentloaded' if CONFIG['fast_load'] else 'networkidle'
             tqdm.write(f"{Fore.CYAN}[NETWORK]{Style.RESET_ALL} Загрузка контента...")
-            await page.goto(url, wait_until=w_state, timeout=45000)
+            
+            response = await page.goto(url, wait_until=w_state, timeout=30000)
+            
+            # --- УМНЫЙ ОБХОД ANUBIS С СОХРАНЕНИЕМ КУКОВ ---
+            content_text = await page.content()
+            is_bad = (
+                "Проверяем, что вы не бот" in content_text or 
+                "Anubis" in content_text or 
+                "Ошибка расчёта" in content_text or 
+                "Сервис временно недоступен" in content_text or 
+                (response and response.status in [503, 504])
+            )
+            
+            if is_bad:
+                tqdm.write(f"{Fore.YELLOW}[ANUBIS]{Style.RESET_ALL} Проверка безопасности! Даем 10 сек на расчет хеша и получение Cookie...")
+                
+                passed = False
+                # Ждем 10 секунд, пока Анубис досчитает хеш и запишет Cookie
+                for _ in range(10):
+                    if await page.locator('.b-content__main').count() > 0:
+                        tqdm.write(f"{Fore.GREEN}[ANUBIS]{Style.RESET_ALL} Страница готова!")
+                        passed = True
+                        break
+                    await asyncio.sleep(1)
+                
+                # Если страница не обновилась сама, делаем F5 (перезагрузку) С ЖЕСТКО ЗАПИСАННЫМИ КУКАМИ!
+                if not passed:
+                    for attempt in range(1, 4):
+                        if STOP_PROCESS: break
+                        tqdm.write(f"{Fore.YELLOW}[ANUBIS]{Style.RESET_ALL} Нажимаем F5 (Перезагрузка с Cookie, попытка {attempt}/3)...")
+                        try:
+                            await page.reload(wait_until='domcontentloaded', timeout=20000)
+                            await asyncio.sleep(2)
+                            if await page.locator('.b-content__main').count() > 0:
+                                tqdm.write(f"{Fore.GREEN}[ANUBIS]{Style.RESET_ALL} Защита пробита благодаря Cookie!")
+                                passed = True
+                                break
+                        except: pass
+                
+                if not passed and not STOP_PROCESS:
+                    tqdm.write(f"{Fore.RED}[ANUBIS]{Style.RESET_ALL} Не удалось пробить 503. Отмена.")
+                    await page.close()
+                    return (url, False)
             
             # --- ТРЕЙЛЕР ---
             try:
                 tqdm.write(f"{Fore.CYAN}[SEARCH]{Style.RESET_ALL} Поиск кнопки трейлера...")
-                try: await page.wait_for_load_state('networkidle', timeout=5000); await asyncio.sleep(1)
+                try: await page.wait_for_load_state('networkidle', timeout=3000); await asyncio.sleep(0.5)
                 except: pass
 
                 btn = page.locator('a.b-sidelinks__link.show-trailer').first
@@ -366,7 +398,7 @@ async def download_html_task(browser, url, semaphore, proxy_list):
                             }""")
                             await page.wait_for_selector('iframe[src*="youtube"], iframe[src*="google"], .mfp-wrap', state='attached', timeout=4000)
                             tqdm.write(f"  {Fore.GREEN}[TRAILER]{Style.RESET_ALL} Плеер обнаружен в коде.")
-                            await asyncio.sleep(1.5)
+                            await asyncio.sleep(1)
                             trailer_opened = True
                             break 
                         except:
@@ -374,11 +406,13 @@ async def download_html_task(browser, url, semaphore, proxy_list):
                     
                     if not trailer_opened and not STOP_PROCESS:
                         tqdm.write(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Не удалось найти плеер. Отмена.")
+                        await page.close()
                         return (url, False) 
                 else:
                     tqdm.write(f"  {Fore.MAGENTA}[TRAILER]{Style.RESET_ALL} Трейлер отсутствует.")
             except Exception as e: 
                 tqdm.write(f"  {Fore.RED}[ERROR]{Style.RESET_ALL} Ошибка: {str(e).splitlines()[0][:40]}")
+                await page.close()
                 return (url, False)
             # ---------------
 
@@ -387,17 +421,20 @@ async def download_html_task(browser, url, semaphore, proxy_list):
                 content = await page.content()
                 with open(file_name, 'w', encoding='utf-8') as f: f.write(content)
                 tqdm.write(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} Завершено: {clean_filename(url)}")
+                await page.close()
                 return (url, True)
+            
+            await page.close()
             return (url, False)
             
         except Exception as e:
             tqdm.write(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Ошибка: {str(e).splitlines()[0][:50]}")
-            CURRENT_ACTIVE_PROXY = None 
+            try: await page.close()
+            except: pass
             return (url, False)
-        finally: await context.close()
 
 async def run_html_downloader():
-    global STOP_PROCESS
+    global STOP_PROCESS, CURRENT_ACTIVE_PROXY
     STOP_PROCESS = False
     urls, raw_proxies = load_urls_from_file(), load_proxies()
     if not urls: 
@@ -415,12 +452,29 @@ async def run_html_downloader():
     print(f"{Fore.WHITE}Всего ссылок в очереди: {len(urls)}{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
+        browser_opts = dict(headless=False, args=BROWSER_ARGS)
+        if CONFIG['stealth']:
+            browser_opts['ignore_default_args'] = ["--enable-automation"]
+            
+        browser = await p.chromium.launch(**browser_opts)
+        
+        # --- ВАЖНЕЙШЕЕ ОБНОВЛЕНИЕ: СОЗДАЕМ ЕДИНУЮ СЕССИЮ ДЛЯ ВСЕХ ФИЛЬМОВ ---
+        proxy_config = None
+        if CONFIG["use_proxy"] and proxies:
+            if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
+            proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+
+        context = await browser.new_context(
+            proxy=proxy_config,
+            locale='ru-RU', 
+            timezone_id='Europe/Moscow'
+        )
+
         sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
         to_do, loop_cnt = urls, 1
         
         while to_do and not STOP_PROCESS:
-            tasks = [download_html_task(browser, u, sem, proxies) for u in to_do]
+            tasks = [download_html_task(context, u, sem) for u in to_do]
             res = await tqdm.gather(*tasks, desc=f"Круг {loop_cnt}")
             if STOP_PROCESS: break
             failed = [u for u, s in res if not s]
@@ -437,6 +491,8 @@ async def run_html_downloader():
                 if idx == 1: break
             
             to_do, loop_cnt = failed, loop_cnt + 1
+            
+        await context.close()
         await browser.close()
     
     if not STOP_PROCESS:
@@ -477,7 +533,18 @@ async def run_category_parser():
     print(f"{Fore.YELLOW}[ПРОБЕЛ - Пауза/Отмена]{Style.RESET_ALL}\n")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
+        browser_opts = dict(headless=False, args=BROWSER_ARGS)
+        if CONFIG['stealth']:
+            browser_opts['ignore_default_args'] = ["--enable-automation"]
+            
+        browser = await p.chromium.launch(**browser_opts)
+        
+        proxy_config = None
+        if CONFIG["use_proxy"] and proxies:
+            if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
+            proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
+
+        context = await browser.new_context(proxy=proxy_config)
         
         pages_to_parse = list(range(start_p, end_p + 1))
         loop_cnt = 1
@@ -488,22 +555,13 @@ async def run_category_parser():
             for i in pages_to_parse:
                 if STOP_PROCESS or check_interrupt(): break
                 
-                proxy_config = None
-                if CONFIG["use_proxy"] and proxies:
-                    if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
-                    proxy_config = {"server": f"http://{CURRENT_ACTIVE_PROXY}"}
-                    p_display = f"{CURRENT_ACTIVE_PROXY}"
-                else:
-                    p_display = "Local IP"
-
-                context = await browser.new_context(proxy=proxy_config)
                 try:
                     page = await context.new_page()
-                    url_to_parse = f"{BASE_URL}{cats[c_idx][1]}" + (f"page/{i}/" if i > 1 else "")
+                    if CONFIG['stealth']: await page.add_init_script(STEALTH_JS)
                     
+                    url_to_parse = f"{BASE_URL}{cats[c_idx][1]}" + (f"page/{i}/" if i > 1 else "")
                     links = []
                     
-                    # Делаем 2 попытки (обычная загрузка + перезагрузка если не дотянули до 36)
                     for attempt in range(1, 3):
                         if STOP_PROCESS: break
                         try: 
@@ -513,6 +571,17 @@ async def run_category_parser():
                                 print(f"  {Fore.YELLOW}[RELOAD]{Style.RESET_ALL} Найдено {len(links)}/36. Перезагрузка...")
                                 await page.reload(wait_until='domcontentloaded', timeout=15000)
                         except: pass 
+                        
+                        # --- ОБРАБОТКА ANUBIS В ПАРСЕРЕ ---
+                        content_text = await page.content()
+                        if "Anubis" in content_text or "Сервис временно недоступен" in content_text:
+                            await asyncio.sleep(5)
+                            for _ in range(3):
+                                if await page.locator('.b-content__main').count() > 0: break
+                                try:
+                                    await page.reload(wait_until='domcontentloaded', timeout=10000)
+                                    await asyncio.sleep(2)
+                                except: pass
 
                         poll_start = time.time()
                         last_count = 0
@@ -521,10 +590,7 @@ async def run_category_parser():
                         while time.time() - poll_start < 12:
                             try:
                                 links = await page.locator('.b-content__inline_item-link a').evaluate_all("els => els.map(e => e.href)")
-                                if len(links) >= 36:
-                                    break
-                                    
-                                # Проверка на зависание (если счетчик не меняется 3 секунды - идем дальше)
+                                if len(links) >= 36: break
                                 if len(links) != last_count:
                                     last_count = len(links)
                                     stable_time = time.time()
@@ -533,22 +599,21 @@ async def run_category_parser():
                             except: pass
                             await asyncio.sleep(0.5)
                             
-                        # Если набрали 36, выходим из цикла попыток и не перезагружаем
-                        if len(links) >= 36:
-                            break
+                        if len(links) >= 36: break
 
                     if len(links) > 0:
                         added = append_to_parser_file(links)
-                        print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} {p_display} Стр {i}/{end_p} | Найдено: {len(links)} | Новых: {added}")
+                        p_disp = f"{CURRENT_ACTIVE_PROXY}" if CURRENT_ACTIVE_PROXY else "Local IP"
+                        print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} {p_disp} Стр {i}/{end_p} | Найдено: {len(links)} | Новых: {added}")
                     else:
                         raise Exception("Ссылки не найдены")
                         
                 except Exception as e:
                     print(f"{Fore.RED}[FAILED]{Style.RESET_ALL} Стр {i} Error: {str(e)[:30]}")
-                    CURRENT_ACTIVE_PROXY = None
                     failed_pages.append(i)
                 finally: 
-                    await context.close()
+                    try: await context.close()
+                    except: pass
             
             if STOP_PROCESS or not failed_pages: break
             
@@ -563,6 +628,7 @@ async def run_category_parser():
                 pages_to_parse = failed_pages
                 loop_cnt += 1
 
+        await context.close()
         await browser.close()
     
     if not STOP_PROCESS:
@@ -580,8 +646,11 @@ async def run_franchise_parser():
     os.system('cls' if os.name == 'nt' else 'clear')
     print(f"{Fore.CYAN}--- ПАРСИНГ ---{Style.RESET_ALL}\n")
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
-        
+        browser_opts = dict(headless=False, args=BROWSER_ARGS)
+        if CONFIG['stealth']:
+            browser_opts['ignore_default_args'] = ["--enable-automation"]
+            
+        browser = await p.chromium.launch(**browser_opts)
         proxy_config = None
         if CONFIG["use_proxy"] and proxies:
             if not CURRENT_ACTIVE_PROXY: CURRENT_ACTIVE_PROXY = random.choice(proxies)
@@ -590,12 +659,20 @@ async def run_franchise_parser():
         ctx = await browser.new_context(proxy=proxy_config)
         try:
             page = await ctx.new_page()
+            if CONFIG['stealth']: await page.add_init_script(STEALTH_JS)
             await page.goto(url, wait_until='domcontentloaded')
+            
+            content_text = await page.content()
+            if "Anubis" in content_text or "Сервис временно недоступен" in content_text:
+                await asyncio.sleep(5)
+                await page.reload(wait_until='domcontentloaded', timeout=10000)
+                
             links = await page.locator('.b-post__partcontent_item .td.title a').evaluate_all("els => els.map(e => e.href)")
             if links: 
                 added = append_to_parser_file(links)
                 print(f"{Fore.GREEN}[DONE]{Style.RESET_ALL} Добавлено {added} ссылок.")
         except: pass
+        await ctx.close()
         await browser.close()
     print(f"\n{Fore.GREEN}[SUCCESS] Готово! Данные в {PARSER_FILE}{Style.RESET_ALL}")
     msvcrt.getch()
