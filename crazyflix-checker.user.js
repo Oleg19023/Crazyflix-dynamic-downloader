@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         CrazyFlix Rezka DB Checker
 // @namespace    http://tampermonkey.net/
-// @version      2.8
-// @description  Сканер Rezka.ag: Мгновенная загрузка (Кеш) + Кнопка ручного обновления БД.
+// @version      2.9
+// @description  Сканер Rezka.ag: Мгновенная загрузка (Кеш) + Быстрое сохранение молнией.
 // @author       W1zarD
 // @match        *://rezka.ag/*
 // @match        *://*.rezka.ag/*
@@ -66,14 +66,33 @@
         .cf-save-btn:hover { background: #ff1a1a; transform: scale(1.1); }
         .cf-save-btn.saved { background: #4caf50; }
 
-        #cf-manager-btn {
+        /* Контейнер плавающих кнопок */
+        #cf-controls-container {
             position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+            display: flex; align-items: center; gap: 10px;
+        }
+
+        #cf-manager-btn {
             background: #00bcd4; color: white; border: none; border-radius: 50px;
             padding: 10px 20px; font-size: 14px; font-weight: bold; cursor: pointer;
             box-shadow: 0 4px 10px rgba(0,0,0,0.4);
             display: flex; align-items: center; gap: 8px;
+            transition: 0.2s;
         }
+        #cf-manager-btn:hover { background: #00acc1; transform: scale(1.03); }
         #cf-manager-badge { background: white; color: #00bcd4; border-radius: 10px; padding: 1px 6px; font-size: 11px; }
+
+        /* Круглая кнопка молнии */
+        #cf-quick-save-btn {
+            width: 42px; height: 42px; border-radius: 50%;
+            background: #ff9800; color: white; border: none;
+            font-size: 20px; cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            display: flex; align-items: center; justify-content: center;
+            transition: 0.2s;
+        }
+        #cf-quick-save-btn:hover { background: #f57c00; transform: scale(1.1); }
+        #cf-quick-save-btn:active { transform: scale(0.95); }
 
         #cf-modal {
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -119,11 +138,27 @@
         }
     }
 
+    function saveAllRedCards() {
+        const redCards = document.querySelectorAll('.cf-card-red');
+        let added = 0;
+        redCards.forEach(card => {
+            const link = card.querySelector('.b-content__inline_item-link a');
+            const btn = card.querySelector('.cf-save-btn');
+            if(link && btn && !btn.classList.contains('saved')) {
+                saveUrl(link.href);
+                btn.innerHTML = '✔️'; btn.classList.add('saved');
+                added++;
+            }
+        });
+        renderList();
+        updateBadge();
+        return added;
+    }
+
     // Загрузка базы с УМНЫМ КЕШИРОВАНИЕМ
     function fetchDatabase(forceRefresh = false) {
         const managerBtn = document.getElementById('cf-manager-btn');
         
-        // Если не просили принудительно обновить, проверяем кеш
         if (!forceRefresh) {
             const cached = GM_getValue(CACHE_KEY, null);
             if (cached && (Date.now() - cached.time < CACHE_TIME)) {
@@ -137,13 +172,12 @@
             }
         }
 
-        // Если кеш устарел или нажата кнопка "Обновить"
         if(managerBtn) managerBtn.innerHTML = `⏳ Скачивание БД...`;
         console.log("[CrazyFlix] Скачивание свежей БД из GitHub Releases...");
 
         GM_xmlhttpRequest({
             method: "GET",
-            url: DB_URL + (forceRefresh ? "?t=" + Date.now() : ""), // Обход кеша провайдера
+            url: DB_URL + (forceRefresh ? "?t=" + Date.now() : ""),
             nocache: true,
             onload: function(response) {
                 dbLoaded = true; 
@@ -159,7 +193,6 @@
                         idsArray.push(match[1]);
                     }
                     
-                    // Сохраняем новую базу в кеш браузера
                     GM_setValue(CACHE_KEY, { time: Date.now(), data: idsArray });
                     
                     console.log(`[CrazyFlix] Синхронизировано: ${knownIds.size} фильмов.`);
@@ -230,10 +263,22 @@
     }
 
     function createUI() {
+        // Контейнер плавающих кнопок
+        const controlsContainer = document.createElement('div');
+        controlsContainer.id = 'cf-controls-container';
+
         const managerBtn = document.createElement('button');
         managerBtn.id = 'cf-manager-btn';
         managerBtn.innerHTML = `⚙️ Manager <span id="cf-manager-badge">0</span>`;
-        document.body.appendChild(managerBtn);
+
+        const quickSaveBtn = document.createElement('button');
+        quickSaveBtn.id = 'cf-quick-save-btn';
+        quickSaveBtn.title = 'Быстро сохранить все красные карточки со страницы';
+        quickSaveBtn.innerHTML = `⚡`;
+
+        controlsContainer.appendChild(managerBtn);
+        controlsContainer.appendChild(quickSaveBtn);
+        document.body.appendChild(controlsContainer);
 
         const modal = document.createElement('div');
         modal.id = 'cf-modal';
@@ -259,6 +304,13 @@
         `;
         document.body.appendChild(modal);
 
+        // Клики по кнопкам
+        quickSaveBtn.onclick = () => {
+            saveAllRedCards();
+            quickSaveBtn.style.transform = 'scale(1.25)';
+            setTimeout(() => { quickSaveBtn.style.transform = ''; }, 200);
+        };
+
         managerBtn.onclick = () => { renderList(); modal.style.display = 'flex'; };
         document.getElementById('cf-close').onclick = () => modal.style.display = 'none';
         
@@ -268,27 +320,12 @@
             applyMode();
         };
 
-        // Кнопка обновления БД вручную
         document.getElementById('cf-sync-db').onclick = () => {
-            fetchDatabase(true); // Запускаем принудительное скачивание
-            modal.style.display = 'none'; // Закрываем окно, чтобы видеть процесс на кнопке
+            fetchDatabase(true);
+            modal.style.display = 'none';
         };
 
-        document.getElementById('cf-save-all').onclick = () => {
-            const redCards = document.querySelectorAll('.cf-card-red');
-            let added = 0;
-            redCards.forEach(card => {
-                const link = card.querySelector('.b-content__inline_item-link a');
-                const btn = card.querySelector('.cf-save-btn');
-                if(link && btn && !btn.classList.contains('saved')) {
-                    saveUrl(link.href);
-                    btn.innerHTML = '✔️'; btn.classList.add('saved');
-                    added++;
-                }
-            });
-            renderList();
-            updateBadge();
-        };
+        document.getElementById('cf-save-all').onclick = saveAllRedCards;
 
         document.getElementById('cf-clear').onclick = () => {
             if(confirm("Очистить список сохраненных ссылок?")) {
